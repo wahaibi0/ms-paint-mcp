@@ -18,12 +18,19 @@ MCP server that paints in Windows 11 Paint by driving the real app. See README.m
 ## Painting rules
 
 - **Brush strokes only.** Never use fills, flood fills, shape tools or filled shapes; the server deliberately has none. Every colored area is built from brush strokes, as on a real canvas.
+- **The only fill allowed is the canvas ground.** If the canvas should start as a color, tone it with `new_canvas(background=...)` before painting. Nothing else is ever filled.
+- **Fix mistakes on the same canvas with the brush.** Never start a new painting to correct one. Paint over the mistake locally, then redraw anything the correction covered.
 - **Paint back to front:** background, distant scenery, foreground, main subject, shadows, highlights, fine details.
 - **Broad to fine:** large brushes for coverage, then smaller ones near edges and for details.
 - **Cover areas with continuous, parallel, overlapping strokes**, not dots. Use efficient paths, but never at the cost of quality.
 - **Edges must be perfectly smooth.** Cut in each area's edge with a small brush first, then fill the inside with rows whose round tips stop inside that edge. Never rely on a later line or layer to hide a ragged edge.
 - **Check the canvas with `view` between stages** and fix mistakes locally, not by repainting large areas.
 - **Pick brush type, size and opacity to suit the style** (see LESSONS.md), and record what each challenge teaches there.
+- **Work in a loop, never blind:** look (`view`, `zoom`), compare with the reference at several scales, pick the action with the best gain against risk and cost, paint it, look again. Full strategy in LESSONS.md.
+- **Coarse to fine:** analyze and plan, block in large shapes, develop form with thin layers, then refine and validate. Never refine details while the big proportions are wrong.
+- **Protect what's right and correct causes:** don't repaint correct areas; fix the underlying proportion or color, not its symptoms.
+- **Global consistency:** no local improvement that makes the whole painting worse.
+- **Know when to stop:** make a change only if its expected improvement outweighs its risk.
 
 ## Saving work
 
