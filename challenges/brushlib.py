@@ -99,27 +99,63 @@ def _rot(q, a):
     return (q[0] * c - q[1] * s, q[0] * s + q[1] * c)
 
 
-def cover(poly, c, size, angle=0, spacing=0.55, wobble=1.0, smooth_poly=True):
-    """Paint the area inside poly with parallel, overlapping brush strokes laid at `angle` degrees.
-    Each connected run of rows is one continuous zigzag stroke, the way a painter blocks in color."""
+def _inset(poly, d):
+    """The polygon moved inward by d (miter offset of each vertex)."""
+    area = sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(poly, poly[1:] + poly[:1]))
+    side = 1 if area > 0 else -1
+    out = []
+    for prev, cur, nxt in zip(poly[-1:] + poly[:-1], poly, poly[1:] + poly[:1]):
+        normals = []
+        for (x1, y1), (x2, y2) in ((prev, cur), (cur, nxt)):
+            length = math.hypot(x2 - x1, y2 - y1) or 1
+            normals.append((-side * (y2 - y1) / length, side * (x2 - x1) / length))
+        nx, ny = normals[0][0] + normals[1][0], normals[0][1] + normals[1][1]
+        length = math.hypot(nx, ny) or 1
+        nx, ny = nx / length, ny / length
+        k = d / max(0.5, nx * normals[0][0] + ny * normals[0][1])  # miter, capped at sharp corners
+        out.append((cur[0] + nx * k, cur[1] + ny * k))
+    return out
+
+
+def _area(q):
+    return sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(q, q[1:] + q[:1]))
+
+
+def cover(poly, c, size, angle=0, spacing=0.55, wobble=1.0, smooth_poly=True, edge=5):
+    """Paint the area inside poly the way a painter does, from the outside in.
+
+    1. Cut in the edge: one continuous stroke of a small brush (`edge` px) whose outer side runs
+       exactly along the outline. Smooth contour, near-sharp corners.
+    2. Rings following the outline with brushes growing about 2.4x each time up to `size`, each
+       ring's outer side on the previous ring's center line, so no slivers open along curves and
+       corner pockets stay covered.
+    3. The core: parallel rows of the `size` brush at `angle` degrees, as continuous zigzags, their
+       centers inside the last ring's center line, so their round tips never reach the edge."""
     color(c)
     if smooth_poly:
         poly = smooth(*poly, closed=True)
+    widths = [min(edge, size)]
+    while widths[-1] < size:
+        widths.append(min(size, widths[-1] * 2.4))
+    center = 0.0
+    for k, b in enumerate(widths):
+        center = b / 2 if k == 0 else center + b / 2
+        ring = _inset(poly, center)
+        if _area(ring) * _area(poly) <= 0:
+            return  # the shape is used up; the rings so far cover it
+        stroke(ring + ring[:1], max(1, round(b)))  # straight between points: corners stay sharp
+    inner = ring
+    gap = max(2.0, size * spacing)
     a = math.radians(angle)
-    rp = [_rot(q, -a) for q in poly]
+    rp = [_rot(q, -a) for q in inner]
     ys = [q[1] for q in rp]
-    gap, r = max(2.0, size * spacing), size * 0.5
-    # First and last rows sit a brush radius in, so the round brush tips stop at the edge, not past it.
-    top, bottom = min(ys) + r, max(ys) - r
+    top, bottom = min(ys), max(ys)
     n = max(1, math.ceil((bottom - top) / gap))
-    rows = [top + (bottom - top) * i / n for i in range(n + 1)] if bottom > top else [(min(ys) + max(ys)) / 2]
+    rows = [top + (bottom - top) * i / n for i in range(n + 1)]
     chains, active = [], []
     for y in rows:
         nxt = []
-        for x0, x1 in _spans(rp, y):
-            x0, x1 = x0 + r, x1 - r
-            if x0 > x1:
-                x0 = x1 = (x0 + x1) / 2
+        for x0, x1 in _spans(rp, min(max(y, top + 0.01), bottom - 0.01)):
             ch = next((ch for ch in active if ch["s"][0] <= x1 + gap and x0 - gap <= ch["s"][1]), None)
             if ch:
                 active.remove(ch)
@@ -138,8 +174,9 @@ def cover(poly, c, size, angle=0, spacing=0.55, wobble=1.0, smooth_poly=True):
         dense = []
         for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
             n = max(1, int(math.hypot(x2 - x1, y2 - y1) / 25))
-            dense += [(x1 + (x2 - x1) * i / n + random.uniform(-wobble, wobble),
-                       y1 + (y2 - y1) * i / n + random.uniform(-wobble, wobble)) for i in range(n)]
+            # hand wobble only mid-row; row ends stay exact so tips never reach the edge
+            dense += [(x1 + (x2 - x1) * i / n + (random.uniform(-wobble, wobble) if i else 0),
+                       y1 + (y2 - y1) * i / n + (random.uniform(-wobble, wobble) if i else 0)) for i in range(n)]
         dense.append(pts[-1])
         stroke(dense, size)
 

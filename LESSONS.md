@@ -7,15 +7,39 @@ What painting in Windows 11 Paint through this server has taught so far. The ser
 - **Brush strokes only.** No fills or shapes (the server has neither). Flood fill only works on a region that is one even color, which forces an unnatural painting order. One mis-aimed fill point also recolored a whole dress in the first Mona Lisa.
 - **Back to front:** background, distant scenery, foreground, main subject, shadows, highlights, fine details. Later strokes simply paint over earlier ones, as on a real canvas.
 - **Broad to fine.** Block in large areas with big brushes (30-60 px), then switch to smaller ones (2-12 px) near edges and for details.
-- **Cover areas with parallel rows of overlapping strokes**, spaced about 0.55 × brush size, as one continuous zigzag per area. `challenges/brushlib.py` has `cover()` for this.
-- **Brush tips are round.** Keep the first and last row a brush radius inside the edge, or color spills past it. Let areas that touch the canvas edge run past it, otherwise the edge looks scalloped.
-- **Draw dividing lines last.** Paint blocks up to the line's center, then paint the line over the seam (Mondrian).
+- **Every edge must be smooth on its own.** Never rely on a later line or layer to hide a ragged rim.
+- **Cover an area from the outside in** (`cover()` in `challenges/brushlib.py`):
+  1. Cut in the edge with one continuous small-brush stroke (about 5 px) whose outer side runs exactly along the outline.
+  2. Lay rings that follow the outline, the brush growing about 2.4× each time up to the big size. Each ring's outer side sits on the previous ring's center line.
+  3. Fill the core with parallel rows (spaced 0.55 × size) as continuous zigzags, their centers inside the last ring.
+
+  Rows alone leave a scalloped rim, because round tips stop at different depths. Along curves they also leave white slivers where the outermost rows shrink to dots. Measured on test shapes, the rings removed both.
+- **Shrink the outline by a true perpendicular offset** to place strokes. Insetting row ends horizontally lets tips poke out on slanted edges.
+- **Let areas that touch the canvas edge run past it**, otherwise the edge looks scalloped.
+- **Draw dividing lines last** (Mondrian), but the blocks under them still get clean edges.
 - **Check the canvas with `view` after each stage** and fix mistakes locally, not by repainting large areas.
 - **Every color change opens Paint's color dialog (about 3 s)**, so group strokes by color.
 
-## Style playbook
+## Know the brushes
 
-Brush types are Paint's own: Brush, Calligraphy brush, Calligraphy pen, Airbrush, Oil brush, Crayon, Marker, Natural pencil, Watercolor brush. `opacity` 1-100 lets a stroke glaze over what is beneath.
+Measured with one straight black stroke at size 20, full opacity:
+
+| Brush type | Painted width | Edge | Coverage | Use for |
+|------------|---------------|------|----------|---------|
+| Brush | 21 px | perfectly smooth | solid | flat areas, clean edges, lines |
+| Calligraphy brush | 15 px (direction-dependent) | smooth | solid | lines that swell and thin |
+| Calligraphy pen | 15 px (direction-dependent) | smooth | solid | crisp outlines (ukiyo-e) |
+| Airbrush | sparse spray | soft | very light per pass | soft shading in many passes |
+| Oil brush | 31 px | rough (±2.5 px) | nearly solid | textured, visible brushwork |
+| Crayon | 12 px | rough (±2.8 px) | grainy | expressive texture |
+| Marker | 24 px | smooth | about 75% (see-through) | glazes with a clean edge |
+| Natural pencil | 1 px | slightly rough | light gray | sketch lines |
+| Watercolor brush | 22 px | soft, uneven | about 75%, textured | washes and blends |
+
+- **`size` is the painted width in pixels for the Brush.** Paint's own size slider paints true up to about 24, then much wider (slider 50 paints 78 px, 90 paints 250 px). The server converts through a measured curve.
+- **`opacity` 1-100 lets a stroke glaze over what is beneath.** Watercolor at 40% over white came out light blue.
+
+## Style playbook
 
 | Style | Approach | Status |
 |-------|----------|--------|
