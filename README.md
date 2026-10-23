@@ -42,7 +42,7 @@ A fun way to push the server: paint a famous work in the style of each artist, w
 
 ## Gallery
 
-Early paintings, made before the server went brush-only (they used fills and shapes): [sunset](gallery/sunset.png), [flower](gallery/flower.png), [Mona Lisa](gallery/mona-lisa.png).
+An early painting, made before the server went brush-only (it used fills and shapes): [sunset](gallery/sunset.png).
 
 ## Caveats
 
