@@ -129,6 +129,30 @@ while not finished:
 - **Shapes thinner than the brush's inner rings don't fill.** A thin boat hull kept a streak of the color beneath; make such shapes thicker or paint them as one stroke.
 - **Long phases make huge GIFs** (24 MB here). Keep every few frames and encode with one shared palette and no dithering: 941 frames came down to 236 and 4 MB.
 
+### The Great Wave, second attempt
+
+The first version was rejected as a solid blue wall with mechanical foam and stick boats, and painted again from scratch.
+
+- **Paint in dependency order:** silhouette, then major forms, then shading, then foam, then details. A stroke waits until everything it depends on is right; detailed foam on a wrong crest is wasted.
+- **Preview before painting.** `canvas(..., preview=True)` simulates every stroke in an image in about 2 seconds, against a phase that takes 10-30 minutes in Paint. The composition went through four previews before any paint went on.
+- **Water is layered masses, not one silhouette.** Overlapping tongues of water, each with a foam edge and a dark seam; secondary waves in a lighter blue; each mass casting shadow on the one behind it.
+- **Water needs texture.** Depth glazes, hundreds of thin flow lines following each mass's curve, broken edges and foam lace. Without them, even layered shapes read as flat cut-outs.
+- **Foam is fingers, not loops.** A dozen claws turning with the curl's rotation, each splitting into a few short claws near its tip. Repeating the same small curl looks mechanical; random directions look like a mop.
+- **Cast shadows only fall on water**, never on sky or the far sea.
+- **Clip shapes to the canvas before laying rings.** Clamping off-canvas points onto the edge pulled rings sideways into blocky "feet" past the waves' outlines.
+- **Sharp tips need the full inset.** Capping how far a corner point moves inward left the brush poking out of the wave's lip as a round bump.
+- **Color-selective repair:** fix a spill by repainting only the pixels of the wrong color in the area, each with the color that belongs behind it. Boats and foam in the same area stay untouched.
+- **Recording holds frames in memory.** A long phase captured over a thousand full-resolution frames; that is gigabytes, and contributed to the run being stopped for low memory. Shrink frames as they are captured, and thin the GIF out at the end (2,057 frames came down to 258 and 7 MB).
+
+### Paint quirks found on the way
+
+- **The zoom slider rounds to whole percent** (110.3% shows as 111), so the canvas scale is worked out from the pen hovers, not taken from the slider.
+- **A swallowed tap can mean the color dialog never opened.** `set_color` checks for the dialog's OK button in a screenshot before typing, so keys never land on the canvas.
+- **The keyboard layout matters.** Under an Arabic layout, layout-based typing turned "F5F1E3" into other letters. Text is now sent as Unicode characters and shortcuts as key codes.
+- **The Save As dialog fills in its default name a moment after opening.** Typing too soon produced `02_great_wave.png02_great_wave.png`. `save` reads the name back before pressing Enter, and the challenge helper never deletes the old PNG until the new one is written.
+- **UI Automation occasionally misses a control for a moment**, and the brush menu sometimes doesn't open on the first tap; both are retried.
+- **When another window takes the foreground briefly**, the server waits up to 30 seconds before giving up.
+
 ## Zoom
 
 - **`zoom(level, x, y)` zooms Paint in on a point**, so details can be painted and inspected close up. Brush size stays in image pixels at any zoom.
