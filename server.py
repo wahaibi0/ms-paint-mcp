@@ -31,7 +31,8 @@ mcp = MCPServer(
     "new_canvas, then paint back to front: background, distant scenery, foreground, main subject, "
     "shadows, highlights, fine details. Cover broad areas with large brushes in continuous parallel "
     "strokes, and switch to smaller brushes near edges and for details. Call view between stages to "
-    "catch mistakes early, and correct them locally. Coordinates are image pixels, origin top-left.",
+    "catch mistakes early, and correct them locally. Coordinates are image pixels, origin top-left. "
+    "Call painting_guide first for brush techniques suited to the style the user asks for.",
 )
 
 
@@ -274,6 +275,13 @@ def stroke(
         UIAWrapper(_find("Name", "Size", "Slider")).iface_range_value.SetValue(size)
     pen.stroke(screen)
     return f"Drew a {tool} stroke through {len(points)} points."
+
+
+@mcp.tool()
+def painting_guide() -> str:
+    """Lessons learned and a per-style playbook (which brush types, sizes, opacity and stroke
+    patterns suit Mondrian, ukiyo-e, impressionism and so on). Read it before painting."""
+    return open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "LESSONS.md"), encoding="utf-8").read()
 
 
 @tool
