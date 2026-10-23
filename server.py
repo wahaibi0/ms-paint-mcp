@@ -31,7 +31,11 @@ mcp = MCPServer(
     "new_canvas, then paint back to front: background, distant scenery, foreground, main subject, "
     "shadows, highlights, fine details. Cover broad areas with large brushes in continuous parallel "
     "strokes, and switch to smaller brushes near edges and for details. Call view between stages to "
-    "catch mistakes early, and correct them locally. Coordinates are image pixels, origin top-left. "
+    "catch mistakes early, and correct them locally on the same canvas with the brush; never start "
+    "over. The only fill allowed is toning the blank canvas with new_canvas(background=...). "
+    "Work in a loop: look (view, zoom), compare with the reference, paint the change with the best gain "
+    "against risk, look again; coarse to fine; protect areas that are already right; stop when more work "
+    "would hurt more than help. Coordinates are image pixels, origin top-left. "
     "Call painting_guide first for brush techniques suited to the style the user asks for.",
 )
 
@@ -170,25 +174,78 @@ def _canvas():
     return rect, w, h
 
 
+_mapping = None  # (scale, origin_x, origin_y): screen = origin + image * scale; reset when the view moves
+
+
+def _pointer_pixel(sx, sy):
+    """The image pixel Paint reports in its status bar while the pen hovers at a screen point."""
+    pen.hover(sx, sy)
+    time.sleep(0.15)
+    texts = _uia.iuia.ElementFromHandle(_paint().handle).FindAll(
+        _uia.tree_scope["descendants"],
+        _uia.iuia.CreatePropertyCondition(_uia.UIA_dll.UIA_ControlTypePropertyId, _uia.known_control_types["Text"]),
+    )
+    for name in (texts.GetElement(i).CurrentName for i in range(texts.Length)):
+        m = re.fullmatch(r"(\d+), (\d+)px", name or "")
+        if m:
+            return int(m[1]), int(m[2])
+    return None
+
+
+def _calibrate():
+    """Measure exactly where the canvas sits on screen at the current zoom and scroll.
+    The scale is the zoom level; the origin is pinned down by hovering the pen at a few points:
+    each reported pixel bounds the origin to a window one pixel wide, and the windows intersect."""
+    global _mapping
+    zoom = UIAWrapper(_find("AutomationId", "ZoomSliderControl")).iface_range_value.CurrentValue
+    scale = zoom / 100 * _u32.GetDpiForWindow(_paint().handle) / 96
+    rect, _, _ = _canvas()  # the visible part of the canvas
+    for _ in range(3):  # hovers right after Paint comes forward can go unseen; try again
+        bounds, seen = [[-1e9, 1e9], [-1e9, 1e9]], 0
+        for fx, fy in ((0.21, 0.27), (0.43, 0.61), (0.67, 0.38), (0.82, 0.79), (0.35, 0.86), (0.58, 0.15)):
+            sx, sy = round(rect.left + fx * rect.width()), round(rect.top + fy * rect.height())
+            px = _pointer_pixel(sx, sy)
+            if px:
+                seen += 1
+                for axis, (s, v) in enumerate(((sx, px[0]), (sy, px[1]))):
+                    bounds[axis][0] = max(bounds[axis][0], s - (v + 1) * scale)
+                    bounds[axis][1] = min(bounds[axis][1], s - v * scale)
+        pen.leave()
+        if seen >= 3 and bounds[0][0] <= bounds[0][1] and bounds[1][0] <= bounds[1][1]:
+            _mapping = (scale, sum(bounds[0]) / 2, sum(bounds[1]) / 2)
+            return
+        time.sleep(0.6)
+    raise RuntimeError("could not locate the canvas on screen")
+
+
 def _to_screen(points):
     rect, w, h = _canvas()
-    scale = rect.width() / w  # shortcut: assumes the whole canvas is visible (new_canvas fits it to the window)
+    if _mapping is None:
+        _calibrate()
+    scale, ox, oy = _mapping
     out = []
     for x, y in points:
         if not (0 <= x < w and 0 <= y < h):
             raise ValueError(f"point ({x}, {y}) is outside the {w}x{h} canvas")
-        out.append((round(rect.left + (x + 0.5) * scale), round(rect.top + (y + 0.5) * scale)))
+        sx, sy = round(ox + (x + 0.5) * scale), round(oy + (y + 0.5) * scale)
+        if not (rect.left <= sx < rect.right and rect.top <= sy < rect.bottom):
+            raise ValueError(f"point ({x}, {y}) is not visible at the current zoom; zoom out or zoom near it")
+        out.append((sx, sy))
     return out
 
 
 @tool
-def new_canvas(width: int = 1000, height: int = 700, discard_unsaved: bool = False) -> str:
-    """Start a fresh white canvas of the given size in pixels, fitted to the window.
+def new_canvas(
+    width: int = 1000, height: int = 700, discard_unsaved: bool = False, background: str | None = None
+) -> str:
+    """Start a fresh canvas of the given size in pixels, fitted to the window.
+    background (#RRGGBB) tones the whole canvas one color first, like a painter's toned ground.
+    That is the only fill this server ever does: everything after it is brush strokes.
     If the current image has unsaved changes this fails unless discard_unsaved is true."""
     if not (1 <= width <= 5000 and 1 <= height <= 5000):
         raise ValueError("width and height must be 1-5000")
-    global _tool
-    _tool = None
+    global _tool, _mapping
+    _tool = _mapping = None
     _paint()
     _keys("{ESC}^n")
     time.sleep(1)
@@ -214,9 +271,16 @@ def new_canvas(width: int = 1000, height: int = 700, discard_unsaved: bool = Fal
     _press("PrimaryButton", prop="AutomationId")  # OK
     time.sleep(0.5)
     _press("Fit to window")
-    _, w, h = _canvas()
+    rect, w, h = _canvas()
     if (w, h) != (width, height):
         raise RuntimeError(f"canvas came out {w}x{h}, not {width}x{height}")
+    if background:
+        set_color(background)
+        _press("Fill")
+        c = rect.mid_point()
+        pen.stroke([(c.x, c.y)])  # the canvas is blank, so this tones all of it
+        _tool = None
+        return f"New {w}x{h} canvas ready, toned {background}."
     return f"New {w}x{h} canvas ready."
 
 
@@ -295,6 +359,54 @@ def stroke(
         UIAWrapper(_find("Name", "Size", "Slider")).iface_range_value.SetValue(size)
     pen.stroke(screen)
     return f"Drew a {tool} stroke through {len(points)} points."
+
+
+@tool
+def zoom(level: int | None = None, x: int | None = None, y: int | None = None) -> str:
+    """Zoom Paint's view to `level` percent (10-1000), centered on image point (x, y), to paint
+    and inspect small details close up. While zoomed in, strokes must lie in the visible part and
+    view() shows just that part, magnified. Call with no level to fit the whole canvas again."""
+    global _mapping
+    _paint()
+    _mapping = None
+    if level is None:
+        _press("Fit to window")
+        _calibrate()
+        return "Zoomed to fit the whole canvas in the window."
+    if not 10 <= level <= 1000:
+        raise ValueError("level must be 10-1000 (percent)")
+    UIAWrapper(_find("AutomationId", "ZoomSliderControl")).iface_range_value.SetValue(level)
+    time.sleep(0.5)
+    _, w, h = _canvas()
+    if x is not None and y is not None:
+        if not (0 <= x < w and 0 <= y < h):
+            raise ValueError(f"({x}, {y}) is outside the {w}x{h} canvas")
+        _calibrate()
+        scale, ox, oy = _mapping
+        viewer = _find("AutomationId", "scrollViewer")
+        box = viewer.rectangle
+        scroll = viewer.element.GetCurrentPattern(_uia.UIA_dll.UIA_ScrollPatternId).QueryInterface(
+            _uia.UIA_dll.IUIAutomationScrollPattern
+        )
+        percents = []
+        for target, lo, hi, pct, seen in (
+            (ox + x * scale, box.left, box.right, scroll.CurrentHorizontalScrollPercent, scroll.CurrentHorizontalViewSize),
+            (oy + y * scale, box.top, box.bottom, scroll.CurrentVerticalScrollPercent, scroll.CurrentVerticalViewSize),
+        ):
+            if seen >= 100 or pct < 0:
+                percents.append(-1)  # this axis doesn't scroll
+            else:
+                content = (hi - lo) * 100 / seen  # the scrollable content's size on screen
+                percents.append(min(100, max(0, pct + (target - (lo + hi) / 2) / (content - (hi - lo)) * 100)))
+        scroll.SetScrollPercent(*percents)
+        time.sleep(0.4)
+        _mapping = None
+    _calibrate()
+    scale, ox, oy = _mapping
+    rect, _, _ = _canvas()
+    return (f"Zoomed to {level}%. Visible part of the image: x {max(0, (rect.left - ox) / scale):.0f}-"
+            f"{min(w, (rect.right - ox) / scale):.0f}, y {max(0, (rect.top - oy) / scale):.0f}-"
+            f"{min(h, (rect.bottom - oy) / scale):.0f}.")
 
 
 @mcp.tool()

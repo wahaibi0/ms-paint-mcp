@@ -67,6 +67,17 @@ def _send(x, y, flags):
     overlay.at = (x, y)
 
 
+def hover(x, y):
+    """Hold the pen just above a screen point, without touching the canvas."""
+    _send(x, y, INRANGE | UPDATE)
+
+
+def leave():
+    """Take the pen out of hover range."""
+    if overlay.at:
+        _send(*overlay.at, UPDATE)
+
+
 def stroke(points, delay=0.008):
     """Put the pen down at the first screen point, drag through the rest, lift at the last."""
     _send(*points[0], INRANGE | UPDATE)
