@@ -16,7 +16,7 @@ from typing import Literal
 
 from mcp.server.mcpserver import Image, MCPServer
 from PIL import ImageGrab
-from pywinauto import Desktop, keyboard
+from pywinauto import Desktop
 from pywinauto.controls.uiawrapper import UIAWrapper
 from pywinauto.uia_defines import IUIA
 from pywinauto.uia_element_info import UIAElementInfo
@@ -77,12 +77,16 @@ def _paint():
         # Paint ignores input while in the background, so it has to come forward. pywinauto's set_focus
         # moves the mouse away, so do it ourselves. Windows refuses SetForegroundWindow from background
         # processes unless we share input with the current foreground thread.
-        for attempt in range(4):
+        # Keep trying for about 30 s: when something else holds the foreground for a moment, the
+        # painting pauses instead of failing. Minimize-and-restore only once, as a last resort.
+        deadline = time.monotonic() + 30
+        attempt = 0
+        while True:
             fg_thread = _u32.GetWindowThreadProcessId(_u32.GetForegroundWindow(), None)
             me = ctypes.windll.kernel32.GetCurrentThreadId()
             _u32.AttachThreadInput(me, fg_thread, True)
             try:
-                if attempt == 3:  # last resort: restoring from minimized activates the window
+                if attempt == 12:  # restoring from minimized activates the window
                     _u32.ShowWindow(w.handle, 6)  # SW_MINIMIZE
                     _u32.ShowWindow(w.handle, 3)  # SW_MAXIMIZE
                 _u32.BringWindowToTop(w.handle)
@@ -92,8 +96,10 @@ def _paint():
             time.sleep(0.8)  # input sent too soon after activation gets swallowed
             if _in_front(w):
                 break
-        else:
-            raise RuntimeError("could not bring Paint to the front")
+            attempt += 1
+            if time.monotonic() > deadline:
+                raise RuntimeError("could not bring Paint to the front")
+            time.sleep(1.2)
     return w
 
 
@@ -104,11 +110,59 @@ def _in_front(w):
     return pid.value == w.process_id()
 
 
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort), ("dwFlags", ctypes.c_ulong),
+                ("time", ctypes.c_ulong), ("dwExtraInfo", ctypes.c_size_t)]
+
+
+class _INPUT(ctypes.Structure):
+    class _U(ctypes.Union):
+        _fields_ = [("ki", _KEYBDINPUT), ("padding", ctypes.c_byte * 32)]
+
+    _fields_ = [("type", ctypes.c_ulong), ("u", _U)]
+
+
+def _key_event(vk=0, char=None, up=False):
+    flags = (4 if char else 0) | (2 if up else 0)  # KEYEVENTF_UNICODE, KEYEVENTF_KEYUP
+    event = _INPUT(type=1)
+    event.u.ki = _KEYBDINPUT(vk, ord(char) if char else 0, flags, 0, 0)
+    _u32.SendInput(1, ctypes.byref(event), ctypes.sizeof(event))
+    time.sleep(0.01)
+
+
+_NAMED_KEYS = {"ESC": 0x1B, "ENTER": 0x0D, "TAB": 0x09}
+
+
 def _keys(keys):
-    """Type into Paint, refusing if anything else has the keyboard so keys never land in the user's windows."""
+    """Type into Paint, refusing if anything else has the keyboard so keys never land in the user's
+    windows. Understands {ESC} {ENTER} {TAB}, ^ (Ctrl) and + (Shift) before a key, and plain text.
+    Independent of the keyboard layout: text goes in as Unicode characters and shortcuts as key codes
+    (under an Arabic layout, layout-based typing turned 'F5F1E3' into other letters)."""
     if not _in_front(_paint()):
         raise RuntimeError("Paint is not in front; not sending keystrokes")
-    keyboard.send_keys(keys)
+    mods, i = [], 0
+    while i < len(keys):
+        ch = keys[i]
+        if ch in "^+":
+            mods.append(0x11 if ch == "^" else 0x10)
+            i += 1
+            continue
+        if ch == "{":
+            end = keys.index("}", i)
+            vk, i = _NAMED_KEYS[keys[i + 1:end]], end + 1
+        else:
+            vk, i = (ord(ch.upper()) if mods else None), i + 1
+        for m in mods:
+            _key_event(m)
+        if vk is None:
+            _key_event(char=ch)
+            _key_event(char=ch, up=True)
+        else:
+            _key_event(vk)
+            _key_event(vk, up=True)
+        for m in reversed(mods):
+            _key_event(m, up=True)
+        mods = []
 
 
 def _find(prop, value, control_type=None, required=True, root=None):
@@ -116,13 +170,16 @@ def _find(prop, value, control_type=None, required=True, root=None):
     if control_type:
         ct = _uia.iuia.CreatePropertyCondition(_uia.UIA_dll.UIA_ControlTypePropertyId, _uia.known_control_types[control_type])
         cond = _uia.iuia.CreateAndCondition(cond, ct)
-    root = root.element if root else _uia.iuia.ElementFromHandle(_paint().handle)
-    el = root.FindFirst(_uia.tree_scope["descendants"], cond)
-    if not el:
-        if required:
-            raise RuntimeError(f"Paint control not found: {value}")
-        return None
-    return UIAElementInfo(el)
+    for attempt in range(3 if required else 1):  # UI Automation occasionally misses a control for a moment
+        base = root.element if root else _uia.iuia.ElementFromHandle(_paint().handle)
+        el = base.FindFirst(_uia.tree_scope["descendants"], cond)
+        if el:
+            return UIAElementInfo(el)
+        if required and attempt < 2:
+            time.sleep(0.4)
+    if required:
+        raise RuntimeError(f"Paint control not found: {value}")
+    return None
 
 
 def _press(name, control_type="Button", prop="Name"):
@@ -150,19 +207,21 @@ def _slider_for(width):
 def _pick_brush(kind):
     """Choose a brush type from the menu under the Brushes button (the menu is its own popup window)."""
     r = _find("AutomationId", "BrushesSplitButton").rectangle
-    pen.stroke([((r.left + r.right) // 2, r.bottom - 8)])  # the menu arrow
-    time.sleep(0.8)
-    tops = _uia.iuia.GetRootElement().FindAll(
-        _uia.tree_scope["children"],
-        _uia.iuia.CreatePropertyCondition(_uia.UIA_dll.UIA_ProcessIdPropertyId, _paint().process_id()),
-    )
-    for top in map(tops.GetElement, range(tops.Length)):
-        item = _find("Name", kind, "MenuItem", required=False, root=UIAElementInfo(top))
-        if item:
-            c = item.rectangle.mid_point()
-            pen.stroke([(c.x, c.y)])
-            time.sleep(0.3)
-            return
+    for _ in range(3):  # the tap that opens the menu is sometimes swallowed: wait for it, retry
+        pen.stroke([((r.left + r.right) // 2, r.bottom - 8)])  # the menu arrow
+        for _ in range(8):
+            time.sleep(0.25)
+            tops = _uia.iuia.GetRootElement().FindAll(
+                _uia.tree_scope["children"],
+                _uia.iuia.CreatePropertyCondition(_uia.UIA_dll.UIA_ProcessIdPropertyId, _paint().process_id()),
+            )
+            for top in map(tops.GetElement, range(tops.Length)):
+                item = _find("Name", kind, "MenuItem", required=False, root=UIAElementInfo(top))
+                if item:
+                    c = item.rectangle.mid_point()
+                    pen.stroke([(c.x, c.y)])
+                    time.sleep(0.3)
+                    return
     _keys("{ESC}")
     raise RuntimeError(f"brush type not found: {kind}")
 
@@ -201,19 +260,27 @@ def _calibrate():
     scale = zoom / 100 * _u32.GetDpiForWindow(_paint().handle) / 96
     rect, _, _ = _canvas()  # the visible part of the canvas
     for _ in range(3):  # hovers right after Paint comes forward can go unseen; try again
-        bounds, seen = [[-1e9, 1e9], [-1e9, 1e9]], 0
-        for fx, fy in ((0.21, 0.27), (0.43, 0.61), (0.67, 0.38), (0.82, 0.79), (0.35, 0.86), (0.58, 0.15)):
+        samples = []
+        for fx, fy in ((0.06, 0.08), (0.21, 0.27), (0.43, 0.61), (0.67, 0.38), (0.82, 0.79),
+                       (0.35, 0.86), (0.58, 0.15), (0.94, 0.93)):
             sx, sy = round(rect.left + fx * rect.width()), round(rect.top + fy * rect.height())
             px = _pointer_pixel(sx, sy)
             if px:
-                seen += 1
-                for axis, (s, v) in enumerate(((sx, px[0]), (sy, px[1]))):
-                    bounds[axis][0] = max(bounds[axis][0], s - (v + 1) * scale)
-                    bounds[axis][1] = min(bounds[axis][1], s - v * scale)
+                samples.append((sx, sy, *px))
         pen.leave()
-        if seen >= 3 and bounds[0][0] <= bounds[0][1] and bounds[1][0] <= bounds[1][1]:
-            _mapping = (scale, sum(bounds[0]) / 2, sum(bounds[1]) / 2)
-            return
+        if len(samples) >= 4:
+            # The slider rounds the zoom to whole percent (110.3% shows as 111), so try scales
+            # around it and keep those every reading agrees with; use the middle one.
+            feasible = []
+            for i in range(801):
+                k = scale * (0.97 + 0.06 * i / 800)
+                bx = [max(s - (v + 1) * k for s, _, v, _ in samples), min(s - v * k for s, _, v, _ in samples)]
+                by = [max(s - (v + 1) * k for _, s, _, v in samples), min(s - v * k for _, s, _, v in samples)]
+                if bx[0] <= bx[1] and by[0] <= by[1]:
+                    feasible.append((k, sum(bx) / 2, sum(by) / 2))
+            if feasible:
+                _mapping = feasible[len(feasible) // 2]
+                return
         time.sleep(0.6)
     raise RuntimeError("could not locate the canvas on screen")
 
@@ -228,9 +295,10 @@ def _to_screen(points):
         if not (0 <= x < w and 0 <= y < h):
             raise ValueError(f"point ({x}, {y}) is outside the {w}x{h} canvas")
         sx, sy = round(ox + (x + 0.5) * scale), round(oy + (y + 0.5) * scale)
-        if not (rect.left <= sx < rect.right and rect.top <= sy < rect.bottom):
+        # canvas-edge pixels can land a fraction past the visible rectangle; pull those back in
+        if not (rect.left - 2 <= sx < rect.right + 2 and rect.top - 2 <= sy < rect.bottom + 2):
             raise ValueError(f"point ({x}, {y}) is not visible at the current zoom; zoom out or zoom near it")
-        out.append((sx, sy))
+        out.append((min(max(sx, rect.left), rect.right - 1), min(max(sy, rect.top), rect.bottom - 1)))
     return out
 
 
@@ -300,11 +368,23 @@ def set_color(hex_color: str) -> str:
     content = next(c for c in win.children() if "DesktopChildSiteBridge" in c.class_name()).rectangle()
     scale = _u32.GetDpiForWindow(win.handle) / 96
     cx, cy = content.mid_point()
-    # One retry: a tap right after Paint comes to the front is sometimes swallowed.
-    for _ in range(2):
+    ok_button = (round(cx - 140 * scale), round(cy + 283 * scale))
+
+    def dialog_open():
+        # No UI Automation while this dialog is open (it makes Paint hang), so look for its blue OK
+        # button in a screenshot instead.
+        r, g, b = ImageGrab.grab().getpixel(ok_button)[:3]
+        return abs(r - 76) + abs(g - 194) + abs(b - 255) < 40
+
+    got = "?"
+    for _ in range(3):  # a tap right after Paint comes to the front is sometimes swallowed
         _press("Edit colors")
-        time.sleep(1.2)
-        # No UI Automation while this dialog is open: querying it makes Paint hang.
+        for _ in range(10):
+            time.sleep(0.2)
+            if dialog_open():
+                break
+        else:
+            continue  # the dialog never opened: tap again, and never type at the canvas
         # shortcut: hex box found by its offset from the centered dialog, re-measure if Paint's layout changes
         pen.stroke([(round(cx + 100 * scale), round(cy - 241 * scale))])
         _keys(f"^a{hex_color}{{ENTER}}")
@@ -448,7 +528,18 @@ def save(path: str) -> str:
     # The type list remembers the last format used, and Paint saves in that format whatever the extension.
     next(c for c in dlg.descendants(class_name="ComboBox") if "PNG (*.png)" in c.texts()).select("PNG (*.png)")
     name = dlg.descendants(class_name="Edit")[0]
-    name.set_edit_text(path)
+    # The dialog fills in its default name a moment after opening; text set before that ends up
+    # with the default appended (a save once came out as "02_great_wave.png02_great_wave.png").
+    # Set the name, read it back, and only press Enter once it is exactly the path.
+    for _ in range(10):
+        time.sleep(0.3)
+        name.set_edit_text(path)
+        time.sleep(0.2)
+        if name.window_text() == path:
+            break
+    else:
+        _keys("{ESC}")
+        raise RuntimeError("could not enter the file name in the Save As dialog")
     _keys("{ENTER}")  # not name.type_keys: its set_focus moves the mouse
     stem = os.path.splitext(os.path.basename(path))[0]
     for _ in range(20):
