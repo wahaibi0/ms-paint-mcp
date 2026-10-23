@@ -129,6 +129,20 @@ def _press(name, control_type="Button", prop="Name"):
     time.sleep(0.2)
 
 
+# Paint's size slider paints true to its value up to about 24, then much wider (measured for the
+# Brush: slider value, painted width in px).
+_SIZE_CURVE = [(1, 1), (24, 25), (30, 38), (32, 41), (36, 49), (40, 57), (45, 67), (55, 87), (60, 97),
+               (70, 132), (80, 174), (90, 250)]
+
+
+def _slider_for(width):
+    """Slider value that paints `width` px with the Brush."""
+    for (s0, w0), (s1, w1) in zip(_SIZE_CURVE, _SIZE_CURVE[1:]):
+        if width <= w1:
+            return max(1, round(s0 + (s1 - s0) * (width - w0) / (w1 - w0)))
+    return 90
+
+
 def _pick_brush(kind):
     """Choose a brush type from the menu under the Brushes button (the menu is its own popup window)."""
     r = _find("AutomationId", "BrushesSplitButton").rectangle
@@ -251,7 +265,9 @@ def stroke(
     opacity: int | None = None,
 ) -> str:
     """Drag the brush, pencil or eraser through the given (x, y) image points in one stroke.
-    Pass dense points for smooth curves. size is the tool width in pixels (1-90).
+    Pass dense points for smooth curves. For the brush, size is the painted width in pixels
+    (1-250; other brush types than "Brush" come out somewhat wider or narrower). For the pencil
+    and eraser it is Paint's raw size setting (1-90).
     brush picks Paint's brush type (texture), used when tool is "brush".
     opacity (1-100) makes the stroke see-through, for glazing and blending colors."""
     if not points:
@@ -270,7 +286,11 @@ def stroke(
     if opacity is not None:
         UIAWrapper(_find("Name", "Opacity", "Slider")).iface_range_value.SetValue(opacity)
     if size is not None:
-        if not 1 <= size <= 90:
+        if tool == "brush":
+            if not 1 <= size <= 250:
+                raise ValueError("brush size must be 1-250")
+            size = _slider_for(size)
+        elif not 1 <= size <= 90:
             raise ValueError("size must be 1-90")
         UIAWrapper(_find("Name", "Size", "Slider")).iface_range_value.SetValue(size)
     pen.stroke(screen)

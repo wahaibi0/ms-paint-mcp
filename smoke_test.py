@@ -41,8 +41,8 @@ assert pixel(378, 20) == (30, 144, 255), "orange overlay cursor leaked into view
 server.set_color("#FF0000")
 server.stroke([(100, 150), (300, 150)], size=30)
 assert pixel(200, 150) == (255, 0, 0), pixel(200, 150)
-assert pixel(200, 140) == (255, 0, 0), "size-30 brush painted narrower than 20px"
-assert pixel(200, 175) == (255, 255, 255), "size-30 brush painted wider than 50px"
+assert pixel(200, 137) == (255, 0, 0), "size-30 brush painted narrower than about 26px"
+assert pixel(200, 168) == (255, 255, 255), "size-30 brush painted wider than about 36px"
 
 server.undo()
 assert pixel(200, 150) == (255, 255, 255)
