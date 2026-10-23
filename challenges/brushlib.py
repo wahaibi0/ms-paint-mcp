@@ -38,13 +38,15 @@ def _clamp(x, y):
     return (min(W - 1, max(0, round(x))), min(H - 1, max(0, round(y))))
 
 
-def stroke(pts, size):
+def stroke(pts, size, opacity=100):
+    """One brush stroke. Opacity is always set explicitly: Paint keeps the last value, so one
+    glaze would otherwise leave every later stroke see-through."""
     out = []
     for q in pts:
         q = _clamp(*q)
         if not out or q != out[-1]:
             out.append(q)
-    p.stroke(out, size=size)
+    p.stroke(out, size=size, opacity=opacity)
 
 
 def chaikin(pts, closed=False, n=3):
@@ -61,8 +63,8 @@ def smooth(*pts, closed=False):
     return chaikin(list(pts), closed)
 
 
-def line(c, size, *pts, wobble=0.0):
-    """One smooth continuous brush stroke through the given points."""
+def line(c, size, *pts, wobble=0.0, opacity=100):
+    """One smooth continuous brush stroke through the given points (opacity < 100 glazes)."""
     color(c)
     sm = smooth(*pts) if len(pts) > 2 else list(pts)
     dense = []
@@ -71,7 +73,7 @@ def line(c, size, *pts, wobble=0.0):
         dense += [(x1 + (x2 - x1) * i / n + random.uniform(-wobble, wobble),
                    y1 + (y2 - y1) * i / n + random.uniform(-wobble, wobble)) for i in range(n)]
     dense.append(sm[-1])
-    stroke(dense, size)
+    stroke(dense, size, opacity)
 
 
 def egg(cx, cy, rx, ry, chin=0.18, n=72):

@@ -5,6 +5,7 @@ and pen cursor are drawn into each frame here, matching what you see on screen.
 """
 
 import ctypes
+import os
 import threading
 import time
 from contextlib import contextmanager
@@ -40,6 +41,21 @@ def _decorate(frame, box):
         x, y = overlay.at[0] - box[0], overlay.at[1] - box[1]
         d.polygon([(x + dx, y + dy) for dx, dy in overlay.ARROW], fill=ORANGE, outline="white")
     return frame
+
+
+def append_gif(main, extra, width=720, frame_ms=110, colors=128):
+    """Join `extra` onto the end of `main` (the painting continued on the same canvas), then delete it."""
+    frames = []
+    for path in (main, extra):
+        with Image.open(path) as g:
+            for i in range(g.n_frames):
+                g.seek(i)
+                f = g.convert("RGB")
+                frames.append(f.resize((width, round(f.height * width / f.width))).quantize(colors=colors, method=Image.Quantize.MEDIANCUT))
+    durations = [frame_ms] * (len(frames) - 1) + [2500]
+    frames[0].save(main, save_all=True, append_images=frames[1:], duration=durations, loop=0, optimize=True)
+    os.remove(extra)
+    print(f"Appended to {main} ({len(frames)} frames, {os.path.getsize(main) // 1024} KB)")
 
 
 @contextmanager
