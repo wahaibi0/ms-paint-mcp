@@ -34,7 +34,7 @@ A fun way to push the server: paint a famous work in the style of each artist, w
 | # | Painting | Inspired by | What it tests | Status |
 |---|----------|-------------|---------------|--------|
 | 1 | Composition with Red, Blue and Yellow | Piet Mondrian | Straight lines and even brush coverage | Done: [painting](challenges/01_mondrian.png), [GIF](challenges/01_mondrian.gif) |
-| 2 | The Great Wave | Katsushika Hokusai | Curves and shape boundaries | In review: [painting](challenges/02_great_wave.png), [GIF](challenges/02_great_wave.gif) (first pass, corrections and zoomed-in detail work, all on one canvas) |
+| 2 | The Great Wave | Katsushika Hokusai | Curves and shape boundaries | In progress: repainted from scratch with layered water and texture; foam and outlines still to finish ([painting so far](challenges/02_great_wave.png), [GIF](challenges/02_great_wave.gif)) |
 | 3 | The Starry Night | Vincent van Gogh | Brush texture and layering | To do |
 | 4 | Impression, Sunrise | Claude Monet | Blending and color transitions | To do |
 | 5 | The Scream | Edvard Munch | Composition and expressive strokes | To do |
