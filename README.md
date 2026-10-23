@@ -30,15 +30,17 @@ claude mcp add ms-paint -- uv run --directory C:\path\to\ms-paint-mcp python -W 
 
 A fun way to push the server: paint a famous work in the style of each artist, with brush strokes only, easiest first. Each challenge is a script in [`challenges/`](challenges) that paints in Paint and saves the painting plus a sped-up GIF of the whole Paint window next to it (`uv run challenges/01_mondrian.py`). What each one teaches goes into [LESSONS.md](LESSONS.md).
 
-| # | Painting | What it tests | Status |
-|---|----------|---------------|--------|
-| 1 | Mondrian | Straight lines and even brush coverage | Done: [painting](challenges/01_mondrian.png), [GIF](challenges/01_mondrian.gif) |
-| 2 | The Great Wave | Curves and shape boundaries | To do |
-| 3 | The Starry Night | Brush texture and layering | To do |
-| 4 | Impression, Sunrise | Blending and color transitions | To do |
-| 5 | The Scream | Composition and expressive strokes | To do |
-| 6 | Girl with a Pearl Earring | Portrait accuracy | To do |
-| 7 | The Birth of Venus | Full-scene complexity | To do |
+| # | Painting | Inspired by | What it tests | Status |
+|---|----------|-------------|---------------|--------|
+| 1 | Composition with Red, Blue and Yellow | Piet Mondrian | Straight lines and even brush coverage | Done: [painting](challenges/01_mondrian.png), [GIF](challenges/01_mondrian.gif) |
+| 2 | The Great Wave | Katsushika Hokusai | Curves and shape boundaries | To do |
+| 3 | The Starry Night | Vincent van Gogh | Brush texture and layering | To do |
+| 4 | Impression, Sunrise | Claude Monet | Blending and color transitions | To do |
+| 5 | The Scream | Edvard Munch | Composition and expressive strokes | To do |
+| 6 | Girl with a Pearl Earring | Johannes Vermeer | Portrait accuracy | To do |
+| 7 | The Birth of Venus | Sandro Botticelli | Full-scene complexity | To do |
+
+Each one is an original painting in the artist's style, not a copy.
 
 ## Gallery
 
