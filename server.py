@@ -1,11 +1,12 @@
 """MCP server that paints in Windows 11 Paint by driving its real UI.
 
-Controls are found by name through UI Automation (native FindFirst/FindAll only:
-pywinauto's Python-side tree walk is slow enough to hang Paint). Mouse input goes
-through mouse_event because Paint ignores pywinauto's drag moves.
+Toolbar controls are found by name and pressed through UI Automation (native
+FindFirst/FindAll only: pywinauto's Python-side tree walk is slow enough to hang Paint).
+The canvas is drawn on with a synthetic pen. Neither touches the user's mouse.
 """
 
 import ctypes
+import functools
 import io
 import os
 import re
@@ -20,23 +21,34 @@ from pywinauto.controls.uiawrapper import UIAWrapper
 from pywinauto.uia_defines import IUIA
 from pywinauto.uia_element_info import UIAElementInfo
 
+import overlay
+import pen
+
 mcp = MCPServer(
     "ms-paint",
-    instructions="Paints in Microsoft Paint. Start with new_canvas, then draw with stroke/shape/fill "
-    "and call view to see the result. Coordinates are image pixels, origin top-left.",
+    instructions="Paints in Microsoft Paint like a human painter: brush strokes only. There is deliberately "
+    "no fill or shape tool; every colored area is built from overlapping brush strokes. Start with "
+    "new_canvas, then paint back to front: background, distant scenery, foreground, main subject, "
+    "shadows, highlights, fine details. Cover broad areas with large brushes in continuous parallel "
+    "strokes, and switch to smaller brushes near edges and for details. Call view between stages to "
+    "catch mistakes early, and correct them locally. Coordinates are image pixels, origin top-left.",
 )
+
+
+def tool(fn):
+    """Register an MCP tool that shows the "Claude is drawing" overlay while it runs."""
+    @functools.wraps(fn)
+    def run(*args, **kwargs):
+        with overlay.showing():
+            return fn(*args, **kwargs)
+    return mcp.tool()(run)
+
 
 _u32 = ctypes.windll.user32
 _uia = IUIA()
-MOVE, DOWN, UP, ABSOLUTE = 0x1, 0x2, 0x4, 0x8000
 
-Shape = Literal[
-    "Line", "Oval", "Rectangle", "Rounded rectangle", "Triangle", "Right triangle", "Diamond",
-    "Pentagon", "Hexagon", "Right arrow", "Left arrow", "Up arrow", "Down arrow",
-    "Four-point star", "Five-point star", "Six-point star", "Heart", "Lightning",
-    "Rounded rectangular callout", "Oval callout", "Cloud callout",
-]
 STROKE_TOOLS = {"brush": ("Brushes", "RadioButton"), "pencil": ("Pencil", "Button"), "eraser": ("Eraser", "Button")}
+_tool = None  # stroke tool last selected, so strokes don't re-tap the toolbar; forgotten whenever Paint loses focus
 
 
 def _paint():
@@ -54,16 +66,53 @@ def _paint():
     if not w.is_maximized():
         w.maximize()
         time.sleep(1.5)
-    w.set_focus()
+    if not _in_front(w):
+        global _tool
+        _tool = None  # the user may have changed tools while Paint was in the background
+        # Paint ignores input while in the background, so it has to come forward. pywinauto's set_focus
+        # moves the mouse away, so do it ourselves. Windows refuses SetForegroundWindow from background
+        # processes unless we share input with the current foreground thread.
+        for attempt in range(4):
+            fg_thread = _u32.GetWindowThreadProcessId(_u32.GetForegroundWindow(), None)
+            me = ctypes.windll.kernel32.GetCurrentThreadId()
+            _u32.AttachThreadInput(me, fg_thread, True)
+            try:
+                if attempt == 3:  # last resort: restoring from minimized activates the window
+                    _u32.ShowWindow(w.handle, 6)  # SW_MINIMIZE
+                    _u32.ShowWindow(w.handle, 3)  # SW_MAXIMIZE
+                _u32.BringWindowToTop(w.handle)
+                _u32.SetForegroundWindow(w.handle)
+            finally:
+                _u32.AttachThreadInput(me, fg_thread, False)
+            time.sleep(0.8)  # input sent too soon after activation gets swallowed
+            if _in_front(w):
+                break
+        else:
+            raise RuntimeError("could not bring Paint to the front")
     return w
 
 
-def _find(prop, value, control_type=None, required=True):
+def _in_front(w):
+    """Whether a Paint window (main or one of its dialog popups) has the foreground."""
+    pid = ctypes.c_ulong()
+    _u32.GetWindowThreadProcessId(_u32.GetForegroundWindow(), ctypes.byref(pid))
+    return pid.value == w.process_id()
+
+
+def _keys(keys):
+    """Type into Paint, refusing if anything else has the keyboard so keys never land in the user's windows."""
+    if not _in_front(_paint()):
+        raise RuntimeError("Paint is not in front; not sending keystrokes")
+    keyboard.send_keys(keys)
+
+
+def _find(prop, value, control_type=None, required=True, root=None):
     cond = _uia.iuia.CreatePropertyCondition(getattr(_uia.UIA_dll, f"UIA_{prop}PropertyId"), value)
     if control_type:
         ct = _uia.iuia.CreatePropertyCondition(_uia.UIA_dll.UIA_ControlTypePropertyId, _uia.known_control_types[control_type])
         cond = _uia.iuia.CreateAndCondition(cond, ct)
-    el = _uia.iuia.ElementFromHandle(_paint().handle).FindFirst(_uia.tree_scope["descendants"], cond)
+    root = root.element if root else _uia.iuia.ElementFromHandle(_paint().handle)
+    el = root.FindFirst(_uia.tree_scope["descendants"], cond)
     if not el:
         if required:
             raise RuntimeError(f"Paint control not found: {value}")
@@ -71,28 +120,32 @@ def _find(prop, value, control_type=None, required=True):
     return UIAElementInfo(el)
 
 
-def _mouse(flags, x, y):
-    sw, sh = _u32.GetSystemMetrics(0), _u32.GetSystemMetrics(1)
-    _u32.mouse_event(flags | MOVE | ABSOLUTE, round(x * 65535 / (sw - 1)), round(y * 65535 / (sh - 1)), 0, 0)
-
-
-def _drag(points, delay=0.004):
-    """Press at the first screen point, move through the rest, release at the last."""
-    _mouse(0, *points[0])
-    time.sleep(0.05)
-    _mouse(DOWN, *points[0])
-    time.sleep(0.05)
-    for p in points[1:]:
-        _mouse(0, *p)
-        time.sleep(delay)
-    _mouse(UP, *points[-1])
+def _press(name, control_type="Button", prop="Name"):
+    """Tap a Paint control with the pen. (UI Automation can't press Paint's tool buttons: they are
+    toggle buttons whose Toggle and default action do nothing.)"""
+    c = _find(prop, name, control_type).rectangle.mid_point()
+    pen.stroke([(c.x, c.y)])
     time.sleep(0.2)
 
 
-def _click(name, control_type="Button"):
-    c = _find("Name", name, control_type).rectangle.mid_point()
-    _drag([(c.x, c.y)])
-    time.sleep(0.2)
+def _pick_brush(kind):
+    """Choose a brush type from the menu under the Brushes button (the menu is its own popup window)."""
+    r = _find("AutomationId", "BrushesSplitButton").rectangle
+    pen.stroke([((r.left + r.right) // 2, r.bottom - 8)])  # the menu arrow
+    time.sleep(0.8)
+    tops = _uia.iuia.GetRootElement().FindAll(
+        _uia.tree_scope["children"],
+        _uia.iuia.CreatePropertyCondition(_uia.UIA_dll.UIA_ProcessIdPropertyId, _paint().process_id()),
+    )
+    for top in map(tops.GetElement, range(tops.Length)):
+        item = _find("Name", kind, "MenuItem", required=False, root=UIAElementInfo(top))
+        if item:
+            c = item.rectangle.mid_point()
+            pen.stroke([(c.x, c.y)])
+            time.sleep(0.3)
+            return
+    _keys("{ESC}")
+    raise RuntimeError(f"brush type not found: {kind}")
 
 
 def _canvas():
@@ -113,38 +166,46 @@ def _to_screen(points):
     return out
 
 
-@mcp.tool()
+@tool
 def new_canvas(width: int = 1000, height: int = 700, discard_unsaved: bool = False) -> str:
     """Start a fresh white canvas of the given size in pixels, fitted to the window.
     If the current image has unsaved changes this fails unless discard_unsaved is true."""
     if not (1 <= width <= 5000 and 1 <= height <= 5000):
         raise ValueError("width and height must be 1-5000")
+    global _tool
+    _tool = None
     _paint()
-    keyboard.send_keys("{ESC}^n")
+    _keys("{ESC}^n")
     time.sleep(1)
     dont_save = _find("AutomationId", "SecondaryButton", "Button", required=False)  # "Don’t save"
     if dont_save:
         if not discard_unsaved:
-            keyboard.send_keys("{ESC}")
+            _keys("{ESC}")
             raise RuntimeError("Paint has unsaved changes. Save them first, or pass discard_unsaved=true.")
-        c = dont_save.rectangle.mid_point()
-        _drag([(c.x, c.y)])
+        UIAWrapper(dont_save).invoke()
         time.sleep(1)
-    keyboard.send_keys("^e")
-    time.sleep(1)
-    _click("Pixels", "RadioButton")
+    for _ in range(2):  # Ctrl+E is occasionally swallowed; retry once
+        _keys("^e")
+        for _ in range(10):
+            time.sleep(0.3)
+            if _find("Name", "Pixels", "RadioButton", required=False):
+                break
+        else:
+            continue
+        break
+    _press("Pixels", "RadioButton")
     for box, value in (("WidthNumberBox", width), ("HeightNumberBox", height)):
-        c = _find("AutomationId", box).rectangle
-        _drag([(c.left + 40, c.bottom - 15)])
-        keyboard.send_keys(f"^a{value}{{TAB}}")
-    _click("OK")
+        UIAWrapper(_find("AutomationId", "InputBox", "Edit", root=_find("AutomationId", box))).set_edit_text(str(value))
+    _press("PrimaryButton", prop="AutomationId")  # OK
     time.sleep(0.5)
-    _click("Fit to window")
+    _press("Fit to window")
     _, w, h = _canvas()
+    if (w, h) != (width, height):
+        raise RuntimeError(f"canvas came out {w}x{h}, not {width}x{height}")
     return f"New {w}x{h} canvas ready."
 
 
-@mcp.tool()
+@tool
 def set_color(hex_color: str) -> str:
     """Set the drawing color (Paint's Color 1), e.g. '#ff8800'."""
     if not re.fullmatch(r"#?[0-9a-fA-F]{6}", hex_color):
@@ -159,73 +220,70 @@ def set_color(hex_color: str) -> str:
     swatch = swatch.rectangle.mid_point()
     content = next(c for c in win.children() if "DesktopChildSiteBridge" in c.class_name()).rectangle()
     scale = _u32.GetDpiForWindow(win.handle) / 96
-    _click("Edit colors")
-    time.sleep(1.2)
-    # No UI Automation while this dialog is open: querying it makes Paint hang.
-    # shortcut: hex box found by its offset from the centered dialog, re-measure if Paint's layout changes
     cx, cy = content.mid_point()
-    _drag([(round(cx + 100 * scale), round(cy - 241 * scale))])
-    keyboard.send_keys(f"^a{hex_color}")
-    # Paint stamps a dot where the pointer is when the dialog closes, so park it on the title bar.
-    _mouse(0, cx, win.rectangle().top + 12)
-    keyboard.send_keys("{ENTER}")
-    time.sleep(0.6)
-    got = "%02X%02X%02X" % ImageGrab.grab().getpixel((swatch.x, swatch.y))[:3]
-    if got != hex_color:
-        raise RuntimeError(f"color did not apply: swatch shows #{got}")
-    return f"Color set to #{hex_color}."
+    # One retry: a tap right after Paint comes to the front is sometimes swallowed.
+    for _ in range(2):
+        _press("Edit colors")
+        time.sleep(1.2)
+        # No UI Automation while this dialog is open: querying it makes Paint hang.
+        # shortcut: hex box found by its offset from the centered dialog, re-measure if Paint's layout changes
+        pen.stroke([(round(cx + 100 * scale), round(cy - 241 * scale))])
+        _keys(f"^a{hex_color}{{ENTER}}")
+        time.sleep(0.6)
+        got = "%02X%02X%02X" % ImageGrab.grab().getpixel((swatch.x, swatch.y))[:3]
+        if got == hex_color:
+            return f"Color set to #{hex_color}."
+        _keys("{ESC}")  # closes the dialog if it is still open
+        time.sleep(0.5)
+    raise RuntimeError(f"color did not apply: swatch shows #{got}")
 
 
-@mcp.tool()
+@tool
 def stroke(
     points: list[tuple[int, int]],
     tool: Literal["brush", "pencil", "eraser"] = "brush",
     size: int | None = None,
+    brush: Literal[
+        "Brush", "Calligraphy brush", "Calligraphy pen", "Airbrush", "Oil brush",
+        "Crayon", "Marker", "Natural pencil", "Watercolor brush",
+    ] = "Brush",
+    opacity: int | None = None,
 ) -> str:
     """Drag the brush, pencil or eraser through the given (x, y) image points in one stroke.
-    Pass dense points for smooth curves. size is the tool width in pixels (1-90)."""
+    Pass dense points for smooth curves. size is the tool width in pixels (1-90).
+    brush picks Paint's brush type (texture), used when tool is "brush".
+    opacity (1-100) makes the stroke see-through, for glazing and blending colors."""
     if not points:
         raise ValueError("points is empty")
+    if opacity is not None and not 1 <= opacity <= 100:
+        raise ValueError("opacity must be 1-100")
+    global _tool
     screen = _to_screen(points)
-    _click(*STROKE_TOOLS[tool])
+    want = (tool, brush) if tool == "brush" else (tool, None)
+    if _tool != want:
+        if tool == "brush":
+            _pick_brush(brush)
+        else:
+            _press(*STROKE_TOOLS[tool])
+        _tool = want
+    if opacity is not None:
+        UIAWrapper(_find("Name", "Opacity", "Slider")).iface_range_value.SetValue(opacity)
     if size is not None:
         if not 1 <= size <= 90:
             raise ValueError("size must be 1-90")
         UIAWrapper(_find("Name", "Size", "Slider")).iface_range_value.SetValue(size)
-    _drag(screen)
+    pen.stroke(screen)
     return f"Drew a {tool} stroke through {len(points)} points."
 
 
-@mcp.tool()
-def shape(kind: Shape, x1: int, y1: int, x2: int, y2: int) -> str:
-    """Draw a Paint shape outline in the current color, dragged from (x1, y1) to (x2, y2).
-    Fill it afterwards with fill() if you want it solid."""
-    (sx1, sy1), (sx2, sy2) = _to_screen([(x1, y1), (x2, y2)])
-    _click(kind)
-    steps = 20
-    _drag([(sx1 + (sx2 - sx1) * i // steps, sy1 + (sy2 - sy1) * i // steps) for i in range(steps + 1)], delay=0.01)
-    _click(kind)  # commits the shape; Escape would discard it
-    return f"Drew {kind}."
-
-
-@mcp.tool()
-def fill(x: int, y: int) -> str:
-    """Flood-fill the region containing (x, y) with the current color."""
-    (sx, sy), = _to_screen([(x, y)])
-    _click("Fill")
-    _drag([(sx, sy)])
-    return f"Filled at ({x}, {y})."
-
-
-@mcp.tool()
+@tool
 def undo() -> str:
     """Undo the last action in Paint."""
-    _paint()
-    keyboard.send_keys("^z")
+    _press("Undo")
     return "Undone."
 
 
-@mcp.tool()
+@tool
 def view() -> Image:
     """Screenshot of the canvas, to check your work."""
     rect, _, _ = _canvas()
@@ -235,7 +293,7 @@ def view() -> Image:
     return Image(data=buf.getvalue(), format="png")
 
 
-@mcp.tool()
+@tool
 def save(path: str) -> str:
     """Save the image to a new absolute .png path through Paint's Save As dialog."""
     path = os.path.abspath(path)
@@ -244,14 +302,14 @@ def save(path: str) -> str:
     if os.path.exists(path):
         raise ValueError(f"{path} already exists; pick a new name")
     win = _paint()
-    keyboard.send_keys("^+s")
+    _keys("^+s")
     dlg = Desktop(backend="win32").window(class_name="#32770", title_re="(?i)save as")
     dlg.wait("ready", timeout=10)
     # The type list remembers the last format used, and Paint saves in that format whatever the extension.
     next(c for c in dlg.descendants(class_name="ComboBox") if "PNG (*.png)" in c.texts()).select("PNG (*.png)")
     name = dlg.descendants(class_name="Edit")[0]
     name.set_edit_text(path)
-    name.type_keys("{ENTER}")
+    _keys("{ENTER}")  # not name.type_keys: its set_focus moves the mouse
     stem = os.path.splitext(os.path.basename(path))[0]
     for _ in range(20):
         # The file appears before Paint finishes writing it; the title changes once it's done.
