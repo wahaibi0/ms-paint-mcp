@@ -1,18 +1,52 @@
 # ms-paint-mcp
 
-MCP server that lets an AI paint in Windows 11 Paint by driving the real app: it finds controls through UI Automation and paints with a synthetic pen, so your mouse is never moved. While it works, Paint gets an orange border, a "Claude is drawing" label and an orange cursor that follows the pen.
+**Give Claude (or any MCP client) a brush and Windows 11 Paint, and watch it paint.**
+
+No image generation, no pasting pixels: it drives the real Paint app with a synthetic pen, one brush stroke at a time, like a person would. No fill bucket, no shape tools. Every colored area is built from overlapping strokes.
+
+[![MIT license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+![Windows 11](https://img.shields.io/badge/Windows%2011-Paint-0078D4)
+![MCP server](https://img.shields.io/badge/MCP-server-orange)
+
+![The Great Wave, painted by Claude in MS Paint with brush strokes only](challenges/02_great_wave.png)
+
+*The Great Wave off Kanagawa, after Hokusai, painted stroke by stroke in MS Paint. [Watch it being painted](challenges/02_great_wave.gif).*
 
 ![Claude painting a Mondrian-style composition in Paint, sped up](challenges/01_mondrian.gif)
 
-It paints like a person: brush strokes only. There is deliberately no fill or shape tool, so every colored area is built from overlapping strokes, back to front. The one exception is toning the blank canvas a single ground color. Mistakes get painted over on the same canvas, never fixed by starting again.
+Your mouse is never moved: controls are found through UI Automation and strokes go in through a synthetic pen. While it works, Paint gets an orange border, a "Claude is drawing" label and an orange cursor that follows the pen. Mistakes get painted over on the same canvas, never fixed by starting again.
 
-## Setup
+## Try it
 
-Needs Windows 11 Paint and [uv](https://docs.astral.sh/uv/).
+1. Install [uv](https://docs.astral.sh/uv/) and clone this repo on Windows 11.
+2. Add the server to Claude Code:
 
-```
-claude mcp add ms-paint -- uv run --directory C:\path\to\ms-paint-mcp python -W ignore server.py
-```
+   ```
+   claude mcp add ms-paint -- uv run --directory C:\path\to\ms-paint-mcp python -W ignore server.py
+   ```
+
+   Or to any other MCP client (Claude Desktop, Cursor, ...):
+
+   ```json
+   {
+     "mcpServers": {
+       "ms-paint": {
+         "command": "uv",
+         "args": ["run", "--directory", "C:\\path\\to\\ms-paint-mcp", "python", "-W", "ignore", "server.py"]
+       }
+     }
+   }
+   ```
+
+3. Ask for a painting:
+
+   > Paint a lighthouse at dusk in the style of Van Gogh.
+
+   > Paint a cat as a Mondrian.
+
+   > Paint a sunset over the sea with watercolor brushes.
+
+If it makes you smile, a star helps other people find it.
 
 ## Tools
 
