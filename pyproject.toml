@@ -1,7 +1,9 @@
 [project]
 name = "ms-paint-mcp"
 version = "0.1.0"
-description = "MCP server that paints in Windows 11 Paint by driving its UI"
+description = "MCP server that lets an AI paint in real Windows 11 Paint, one brush stroke at a time"
+license = "MIT"
+keywords = ["mcp", "mcp-server", "ms-paint", "claude", "ai-art", "windows"]
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
