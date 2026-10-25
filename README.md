@@ -10,9 +10,11 @@ No image generation, no pasting pixels: it drives the real Paint app with a synt
 
 ![The Great Wave, painted by Claude in MS Paint with brush strokes only](challenges/02_great_wave.png)
 
-*The Great Wave off Kanagawa, after Hokusai, painted stroke by stroke in MS Paint. [Watch it being painted](challenges/02_great_wave.gif).*
+*The Great Wave off Kanagawa, after Hokusai, painted stroke by stroke in MS Paint.*
 
 ![Claude painting a Mondrian-style composition in Paint, sped up](challenges/01_mondrian.gif)
+
+*Watch it paint: a Mondrian-style composition, sped up.*
 
 Your mouse is never moved: controls are found through UI Automation and strokes go in through a synthetic pen. While it works, Paint gets an orange border, a "Claude is drawing" label and an orange cursor that follows the pen. Mistakes get painted over on the same canvas, never fixed by starting again.
 
@@ -68,7 +70,7 @@ A fun way to push the server: paint a famous work in the style of each artist, w
 | # | Painting | Inspired by | What it tests | Status |
 |---|----------|-------------|---------------|--------|
 | 1 | Composition with Red, Blue and Yellow | Piet Mondrian | Straight lines and even brush coverage | Done: [painting](challenges/01_mondrian.png), [GIF](challenges/01_mondrian.gif) |
-| 2 | The Great Wave | Katsushika Hokusai | Curves and shape boundaries | In progress: repainted from scratch with layered water and texture; foam and outlines still to finish ([painting so far](challenges/02_great_wave.png), [GIF](challenges/02_great_wave.gif)) |
+| 2 | The Great Wave | Katsushika Hokusai | Curves and shape boundaries | In progress: repainted from scratch with layered water and texture; foam and outlines still to finish ([painting so far](challenges/02_great_wave.png)) |
 | 3 | The Starry Night | Vincent van Gogh | Brush texture and layering | To do |
 | 4 | Impression, Sunrise | Claude Monet | Blending and color transitions | To do |
 | 5 | The Scream | Edvard Munch | Composition and expressive strokes | To do |
